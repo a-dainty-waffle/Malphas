@@ -2,6 +2,8 @@ import sys
 import cv2
 import os
 
+from database import build_database, save_database
+from detector import run
 from PySide6.QtWidgets import (
     QApplication, QLabel, QWidget,
     QHBoxLayout, QVBoxLayout,
@@ -160,7 +162,14 @@ class MalphasUI(QWidget):
 
         h, w, ch = frame.shape
         qimg = QImage(frame.data, w, h, ch * w, QImage.Format_RGB888)
+
         pix = QPixmap.fromImage(qimg)
+
+        pix = pix.scaled(
+            self.video_label.size(),
+            Qt.KeepAspectRatio,
+            Qt.SmoothTransformation
+        )
 
         self.video_label.setPixmap(pix)
 

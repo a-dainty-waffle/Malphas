@@ -34,6 +34,15 @@ def find_known_image(name):
             return path
     return None
 
+def bbox_center(bbox):
+    x1, y1, x2, y2 = bbox
+    return ((x1 + x2) / 2, (y1 + y2) / 2)
+
+
+def distance(b1, b2):
+    c1 = bbox_center(b1)
+    c2 = bbox_center(b2)
+    return np.hypot(c1[0] - c2[0], c1[1] - c2[1])
 
 # ---------------------------
 # ENGINE
@@ -46,7 +55,6 @@ def run(video_source=0, threshold=0.6, check_every_n_frames=5):
     known_embeddings = list(db.values())
 
     app = init_model()
-
     cap = cv2.VideoCapture(video_source, cv2.CAP_DSHOW) if isinstance(
         video_source, int
     ) else cv2.VideoCapture(video_source)
@@ -56,6 +64,7 @@ def run(video_source=0, threshold=0.6, check_every_n_frames=5):
 
     seen_in_frame = {}
     last_seen_time = {}
+    estimated_tracks = {}
 
     frame_counter = 0
     fps = 0
@@ -103,11 +112,37 @@ def run(video_source=0, threshold=0.6, check_every_n_frames=5):
                         best_score = score
                         name = known_names[i]
 
+                estimated = False
+
                 if best_score < threshold:
                     name = "Unknown"
 
+                    best_guess = None
+                    best_distance = 999999
+
+                    for tracked_name, track in estimated_tracks.items():
+
+                        # Ignore stale tracks
+                        if time.time() - track["time"] > 2:
+                            continue
+
+                        d = distance(bbox, track["bbox"])
+
+                        if d < best_distance:
+                            best_distance = d
+                            best_guess = tracked_name
+
+                    if best_guess is not None and best_distance < 120:
+                        name = best_guess
+                        estimated = True
+
                 current_frame_names.add(name)
                 last_seen_time[name] = time.time()
+                if name != "Unknown":
+                    estimated_tracks[name] = {
+                        "bbox": bbox.copy(),
+                        "time": time.time()
+                    }
 
                 # ---------------------------
                 # Reference image
@@ -119,7 +154,7 @@ def run(video_source=0, threshold=0.6, check_every_n_frames=5):
                 # ---------------------------
                 entry = None
 
-                if not seen_in_frame.get(name, False):
+                if name != "Unknown" and not seen_in_frame.get(name, False):
 
                     entry = log_entry(frame, bbox, name)
 
@@ -142,11 +177,12 @@ def run(video_source=0, threshold=0.6, check_every_n_frames=5):
                 face_data.append({
                     "bbox": bbox,
                     "name": name,
-                    "score": float(best_score)
+                    "score": float(best_score),
+                    "estimated": estimated
                 })
         # CLEANUP
         for person in list(seen_in_frame.keys()):
-            if time.time() - last_seen_time.get(person, 0) > 2:
+            if time.time() - last_seen_time.get(person, 0) > 40:
                 seen_in_frame[person] = False
 
         # ---------------------------
@@ -159,12 +195,22 @@ def run(video_source=0, threshold=0.6, check_every_n_frames=5):
             name = item["name"]
             score = item["score"]
 
-            color = (0, 255, 0) if name != "Unknown" else (0, 0, 255)
+            if item.get("estimated", False):
+                color = (255, 120, 0)      # blue-ish (BGR)
+            elif name != "Unknown":
+                color = (0, 255, 0)
+            else:
+                color = (0, 0, 255)
 
             cv2.rectangle(display, (x1, y1), (x2, y2), color, 2)
+            if item.get("estimated", False):
+                label = f"{name} (Estimated)"
+            else:
+                label = f"{name} ({score:.2f})"
+
             cv2.putText(
                 display,
-                f"{name} ({score:.2f})",
+                label,
                 (x1, y1 - 10),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.6,
